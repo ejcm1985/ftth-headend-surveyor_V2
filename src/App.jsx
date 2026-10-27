@@ -3,7 +3,7 @@ import { dbLocal } from './dbLocal';
 import { 
   Server, HardDrive, Plus, Camera, FileText, Download, 
   Wifi, WifiOff, ArrowLeft, Trash2, Edit2, BookOpen, Layers, 
-  Zap, Wind, ShieldCheck, BatteryCharging, Power
+  Zap, Wind, ShieldCheck, BatteryCharging, Power, CheckCircle2
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
@@ -23,7 +23,7 @@ const TIPOS_INFRA = [
   'Inversor'
 ];
 
-// Compresión nativa optimizada para móviles
+// Compresión nativa optimizada para teléfonos móviles
 const comprimirFoto = (file, maxDimension = 1200, calidad = 0.75) => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -97,7 +97,7 @@ export default function App() {
     nombre: '', tipo: 'OLT', unidades_u: 1, descripcion_default: ''
   });
 
-  // Formulario flexible de Infraestructura
+  // Formulario e imágenes de Infraestructura
   const [tipoInfraSeleccionado, setTipoInfraSeleccionado] = useState(TIPOS_INFRA[0]);
   const [formInfra, setFormInfra] = useState({});
   const [fotosInfra, setFotosInfra] = useState({});
@@ -152,6 +152,42 @@ export default function App() {
       }
     }
   };
+
+  // Helper visual para campos de toma de foto en el modal
+  const renderCampoFoto = (clave, titulo) => (
+    <div key={clave} className="bg-slate-800/60 p-3 rounded-lg border border-slate-700/60">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-semibold text-slate-200">{titulo}</span>
+        {fotosInfra[clave] ? (
+          <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800 flex items-center gap-1">
+            <CheckCircle2 className="w-3 h-3" /> Foto Lista
+          </span>
+        ) : (
+          <span className="text-[10px] text-amber-400 bg-amber-950/40 px-2 py-0.5 rounded border border-amber-900/50">
+            Pendiente
+          </span>
+        )}
+      </div>
+
+      {fotosInfra[clave] && (
+        <div className="mb-2 relative w-full h-28 rounded overflow-hidden border border-cyan-500/80">
+          <img src={fotosInfra[clave]} alt={titulo} className="w-full h-full object-cover" />
+        </div>
+      )}
+
+      <label className="cursor-pointer flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 active:scale-95 text-white py-2 px-3 rounded text-xs transition-all">
+        <Camera className="w-3.5 h-3.5 text-cyan-400" />
+        {fotosInfra[clave] ? 'Reemplazar Foto' : 'Tomar Foto con Cámara'}
+        <input
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={e => manejarFotoGenerica(e, b64 => setFotosInfra(prev => ({ ...prev, [clave]: b64 })))}
+        />
+      </label>
+    </div>
+  );
 
   // --- CRUD CABECERAS ---
   const abrirModalCrearHeadend = () => {
@@ -331,8 +367,6 @@ export default function App() {
     }
     setModalInfra(false);
     setInfraEditando(null);
-    setFormInfra({});
-    setFotosInfra({});
   };
 
   // --- CATÁLOGO CRUD ---
@@ -384,7 +418,7 @@ export default function App() {
     setEquipoEditandoCatalogo(null);
   };
 
-  // --- REPORTE PDF CONSOLIDADO (RACKS + INFRAESTRUCTURA) ---
+  // --- REPORTE PDF CONSOLIDADO (CON FOTOS REALES DE INFRAESTRUCTURA) ---
   const exportarPDFCabecera = async () => {
     if (!headendActual) return;
     const doc = new jsPDF();
@@ -398,11 +432,11 @@ export default function App() {
     doc.setFontSize(10);
     doc.setTextColor(148, 163, 184);
     doc.text(`Código: ${headendActual.codigo} | Dirección: ${headendActual.direccion || 'N/A'}`, 14, 28);
-    doc.text(`Fecha: ${new Date().toLocaleDateString()} | Racks: ${racks.length} | Equipos Infra: ${infraestructuras.length}`, 14, 34);
+    doc.text(`Fecha: ${new Date().toLocaleDateString()} | Racks: ${racks.length} | Equipos Soporte: ${infraestructuras.length}`, 14, 34);
 
     let startY = 48;
 
-    // 1. SECCIÓN: BASTIDORES DE RED (RACKS)
+    // 1. SECCIÓN BASTIDORES
     for (let i = 0; i < racks.length; i++) {
       const rk = racks[i];
       const equiposDelRack = await dbLocal.rack_equipos.where('rack_id').equals(rk.id).toArray();
@@ -449,35 +483,71 @@ export default function App() {
       startY = doc.lastAutoTable.finalY + 12;
     }
 
-    // 2. SECCIÓN: INFRAESTRUCTURA Y SISTEMAS DE SOPORTE
+    // 2. SECCIÓN INFRAESTRUCTURA (TABLA Y FOTOGRAFÍAS REALES)
     if (infraestructuras.length > 0) {
       doc.addPage();
       doc.setFontSize(16);
       doc.setTextColor(14, 116, 144);
-      doc.text(`INFRAESTRUCTURA DE SOPORTE, ENERGÍA Y CLIMA`, 14, 20);
+      doc.text(`INFRAESTRUCTURA, ENERGÍA Y CLIMATIZACIÓN`, 14, 20);
 
-      const filasInfra = infraestructuras.map(inf => {
-        const d = inf.datos || {};
-        const resumen = Object.entries(d)
-          .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
-          .join(' | ');
-        return [inf.tipo, resumen || 'N/A'];
-      });
+      let posInfraY = 30;
 
-      doc.autoTable({
-        startY: 28,
-        head: [['Equipo / Sistema', 'Especificaciones Registradas']],
-        body: filasInfra,
-        theme: 'grid',
-        headStyles: { fillColor: [30, 41, 59] },
-        styles: { fontSize: 8 }
-      });
+      for (let j = 0; j < infraestructuras.length; j++) {
+        const inf = infraestructuras[j];
+
+        if (posInfraY > 230) {
+          doc.addPage();
+          posInfraY = 20;
+        }
+
+        doc.setFontSize(12);
+        doc.setTextColor(30, 41, 59);
+        doc.text(`${j + 1}. ${inf.tipo}`, 14, posInfraY);
+        posInfraY += 5;
+
+        // Fila de Datos
+        const datosEntries = Object.entries(inf.datos || {}).map(([k, v]) => [k.replace(/_/g, ' ').toUpperCase(), v || '-']);
+        doc.autoTable({
+          startY: posInfraY,
+          head: [['Parámetro / Especificación', 'Valor']],
+          body: datosEntries,
+          theme: 'grid',
+          headStyles: { fillColor: [30, 41, 59] },
+          styles: { fontSize: 8 },
+          margin: { left: 14, right: 100 }
+        });
+
+        // Insertar Fotografías al lado derecho o debajo
+        let fotoX = 115;
+        let fotoY = posInfraY;
+        if (inf.fotos) {
+          Object.entries(inf.fotos).forEach(([tituloFoto, b64]) => {
+            if (b64 && b64.startsWith('data:image')) {
+              try {
+                doc.addImage(b64, 'JPEG', fotoX, fotoY, 35, 26, undefined, 'FAST');
+                doc.setFontSize(6);
+                doc.setTextColor(100);
+                doc.text(tituloFoto.replace(/_/g, ' '), fotoX, fotoY + 29);
+                fotoX += 40;
+                if (fotoX > 180) {
+                  fotoX = 115;
+                  fotoY += 34;
+                }
+              } catch (err) {
+                console.error(err);
+              }
+            }
+          });
+        }
+
+        posInfraY = Math.max(doc.lastAutoTable.finalY + 12, fotoY + 36);
+      }
     }
 
     doc.save(`Auditoria_Completa_${headendActual.codigo}.pdf`);
   };
 
-  // --- DESCARGAR TODAS LAS FOTOS (RACKS + INFRAESTRUCTURA EN ZIP) ---
+  // --- DESCARGA ZIP CON CARPETAS Y FOTOS REALES ---
   const descargarFotosCabeceraZIP = async () => {
     if (!headendActual) return;
 
@@ -498,7 +568,7 @@ export default function App() {
       });
     }
 
-    // Fotos de Infraestructura
+    // Fotos de Infraestructura organizadas por tipo
     if (infraestructuras.length > 0) {
       const carpetaInfra = carpetaCabecera.folder(`00_Infraestructura_Facilidades`);
       infraestructuras.forEach((inf, idx) => {
@@ -519,7 +589,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      {/* Header Superior */}
+      {/* Header */}
       <header className="bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center justify-between sticky top-0 z-30">
         <div className="flex items-center gap-3">
           <Layers className="w-6 h-6 text-cyan-400" />
@@ -614,7 +684,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 2. VISTA DE CABECERA SELECCIONADA (CON PESTAÑAS: RACKS / INFRAESTRUCTURA) */}
+        {/* 2. VISTA DE CABECERA SELECCIONADA */}
         {vista === 'racks' && (
           <div>
             <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
@@ -628,7 +698,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Botones de Exportación Completa */}
+              {/* Botones de Exportación */}
               <div className="flex items-center gap-2">
                 <button 
                   onClick={exportarPDFCabecera} 
@@ -647,7 +717,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* PESTAÑAS: BASTIDORES VS INFRAESTRUCTURA */}
+            {/* Pestañas: Racks vs Infraestructura */}
             <div className="flex border-b border-slate-800 mb-6 gap-2">
               <button
                 onClick={() => setSubPestanaCabecera('racks')}
@@ -671,7 +741,7 @@ export default function App() {
               </button>
             </div>
 
-            {/* SUB-PESTAÑA 1: BASTIDORES */}
+            {/* Sub-pestaña RACKS */}
             {subPestanaCabecera === 'racks' && (
               <div>
                 <div className="flex justify-end mb-4">
@@ -728,16 +798,16 @@ export default function App() {
               </div>
             )}
 
-            {/* SUB-PESTAÑA 2: INFRAESTRUCTURA Y FACILIDADES */}
+            {/* Sub-pestaña INFRAESTRUCTURA */}
             {subPestanaCabecera === 'infra' && (
               <div>
                 <div className="flex justify-between items-center mb-4">
-                  <p className="text-xs text-slate-400">Equipos de soporte eléctrico, climatización y energía</p>
+                  <p className="text-xs text-slate-400">Equipos de soporte eléctrico, climatización y energía con fotos reales</p>
                   <button 
                     onClick={abrirModalCrearInfra} 
                     className="flex items-center gap-1.5 bg-cyan-600 hover:bg-cyan-500 text-white px-3 py-2 rounded-lg text-xs font-semibold"
                   >
-                    <Plus className="w-4 h-4" /> Agregar Equipo de Soporte
+                    <Plus className="w-4 h-4" /> Registrar Equipo
                   </button>
                 </div>
 
@@ -775,14 +845,14 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* Galería de fotos del equipo */}
+                        {/* Galería de fotos reales capturadas */}
                         {inf.fotos && Object.keys(inf.fotos).length > 0 && (
                           <div className="mt-3 pt-3 border-t border-slate-800 flex gap-2 overflow-x-auto pb-1">
                             {Object.entries(inf.fotos).map(([nombre, b64]) => b64 && (
-                              <div key={nombre} className="relative flex-shrink-0 w-16 h-16 rounded overflow-hidden border border-slate-700">
+                              <div key={nombre} className="relative flex-shrink-0 w-20 h-20 rounded overflow-hidden border border-slate-700 group">
                                 <img src={b64} alt={nombre} className="w-full h-full object-cover" />
-                                <span className="absolute bottom-0 inset-x-0 bg-black/70 text-[8px] text-center text-slate-200 truncate px-0.5">
-                                  {nombre}
+                                <span className="absolute bottom-0 inset-x-0 bg-black/80 text-[8px] text-center text-slate-200 truncate px-1 py-0.5">
+                                  {nombre.replace(/_/g, ' ')}
                                 </span>
                               </div>
                             ))}
@@ -797,7 +867,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 3. VISTA DE DETALLE DE RACK (ARRIBA A ABAJO) */}
+        {/* 3. VISTA DE DETALLE DE RACK */}
         {vista === 'rack-detail' && (
           <div>
             <div className="flex items-center justify-between gap-4 mb-6">
@@ -889,7 +959,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 4. VISTA DEL CATÁLOGO MAESTRO */}
+        {/* 4. VISTA DEL CATÁLOGO */}
         {vista === 'catalogo' && (
           <div>
             <div className="flex items-center justify-between mb-6">
@@ -938,9 +1008,9 @@ export default function App() {
 
       </main>
 
-      {/* --- MODAL ESPECÍFICO DE INFRAESTRUCTURA Y FACILIDADES --- */}
+      {/* --- MODAL DETALLADO DE INFRAESTRUCTURA (CON FOTOS REALES) --- */}
       {modalInfra && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50 overflow-y-auto">
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 w-full max-w-lg my-8 max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-bold text-white mb-2">
               {infraEditando ? `Editar ${infraEditando.tipo}` : 'Registrar Equipo de Infraestructura'}
@@ -948,7 +1018,7 @@ export default function App() {
             
             {/* Selector de Tipo */}
             <div className="mb-4">
-              <label className="text-xs text-slate-400 block mb-1">Categoría de Infraestructura</label>
+              <label className="text-xs text-slate-400 block mb-1">Categoría</label>
               <select
                 disabled={!!infraEditando}
                 value={tipoInfraSeleccionado}
@@ -995,18 +1065,11 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* 3 Fotos Requeridas */}
                   <div className="pt-2 border-t border-slate-800 space-y-2">
-                    <p className="text-xs font-semibold text-cyan-400">Fotografías Requeridas</p>
-                    {['Cerrado', 'Abierto', 'Barras'].map(fotoTipo => (
-                      <div key={fotoTipo} className="flex items-center justify-between bg-slate-800/40 p-2 rounded">
-                        <span className="text-xs text-slate-300">Foto {fotoTipo}</span>
-                        <label className="cursor-pointer bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-xs">
-                          {fotosInfra[fotoTipo] ? '✓ Cambiar' : 'Tomar Foto'}
-                          <input type="file" accept="image/*" capture="environment" className="hidden" onChange={e => manejarFotoGenerica(e, b64 => setFotosInfra({...fotosInfra, [fotoTipo]: b64}))} />
-                        </label>
-                      </div>
-                    ))}
+                    <p className="text-xs font-semibold text-cyan-400">Fotografías Reales Requeridas</p>
+                    {renderCampoFoto('Tablero_Cerrado', '1. Fotografía Tablero Cerrado')}
+                    {renderCampoFoto('Tablero_Abierto', '2. Fotografía Tablero Abierto (Breakers)')}
+                    {renderCampoFoto('Tablero_Barras', '3. Fotografía de las Barras y Conexiones')}
                   </div>
                 </div>
               )}
@@ -1041,7 +1104,7 @@ export default function App() {
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="text-xs text-slate-400">Sistema Activo</label>
-                      <input type="text" placeholder="Ej: Sí / No" value={formInfra.sistema_activo || ''} onChange={e => setFormInfra({...formInfra, sistema_activo: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
+                      <input type="text" placeholder="Sí / No" value={formInfra.sistema_activo || ''} onChange={e => setFormInfra({...formInfra, sistema_activo: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
                     </div>
                     <div>
                       <label className="text-xs text-slate-400">Inverter</label>
@@ -1050,6 +1113,12 @@ export default function App() {
                         <option value="No">No</option>
                       </select>
                     </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-800 space-y-2">
+                    <p className="text-xs font-semibold text-cyan-400">Fotografías Reales Requeridas</p>
+                    {renderCampoFoto('Termostato_Frontal', '1. Fotografía Frontal / Display')}
+                    {renderCampoFoto('Termostato_Placa', '2. Fotografía Placa / Datos Técnicos')}
                   </div>
                 </div>
               )}
@@ -1069,12 +1138,12 @@ export default function App() {
                   </div>
                   <div className="grid grid-cols-3 gap-2">
                     <div>
-                      <label className="text-xs text-slate-400">Capacidad (BTU/TR)</label>
+                      <label className="text-xs text-slate-400">Capacidad (BTU)</label>
                       <input type="text" placeholder="Ej: 24000 BTU" value={formInfra.capacidad || ''} onChange={e => setFormInfra({...formInfra, capacidad: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
                     </div>
                     <div>
                       <label className="text-xs text-slate-400">Tensión</label>
-                      <input type="text" placeholder="Ej: 220V" value={formInfra.tension || ''} onChange={e => setFormInfra({...formInfra, tension: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
+                      <input type="text" placeholder="220V" value={formInfra.tension || ''} onChange={e => setFormInfra({...formInfra, tension: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
                     </div>
                     <div>
                       <label className="text-xs text-slate-400">Frecuencia</label>
@@ -1096,6 +1165,13 @@ export default function App() {
                         <option value="No">No</option>
                       </select>
                     </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-800 space-y-2">
+                    <p className="text-xs font-semibold text-cyan-400">Fotografías Reales Requeridas</p>
+                    {renderCampoFoto('AC_Unidad_Interior', '1. Fotografía Evaporador (Unidad Interior)')}
+                    {renderCampoFoto('AC_Unidad_Exterior', '2. Fotografía Condensador (Unidad Exterior)')}
+                    {renderCampoFoto('AC_Placa_Datos', '3. Fotografía Placa de Datos Técnicos')}
                   </div>
                 </div>
               )}
@@ -1126,6 +1202,12 @@ export default function App() {
                       <label className="text-xs text-slate-400">Ancho (cm)</label>
                       <input type="number" value={formInfra.ancho_cm || ''} onChange={e => setFormInfra({...formInfra, ancho_cm: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
                     </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-800 space-y-2">
+                    <p className="text-xs font-semibold text-cyan-400">Fotografías Reales Requeridas</p>
+                    {renderCampoFoto('MGB_General', '1. Fotografía General de Barra MGB')}
+                    {renderCampoFoto('MGB_Conexiones', '2. Fotografía Detalle de Conexiones a Tierra')}
                   </div>
                 </div>
               )}
@@ -1174,18 +1256,11 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* 2 Fotos */}
                   <div className="pt-2 border-t border-slate-800 space-y-2">
-                    <p className="text-xs font-semibold text-cyan-400">Fotografías Requeridas</p>
-                    {['Vista Frontal', 'Vista Trasera'].map(fotoTipo => (
-                      <div key={fotoTipo} className="flex items-center justify-between bg-slate-800/40 p-2 rounded">
-                        <span className="text-xs text-slate-300">{fotoTipo}</span>
-                        <label className="cursor-pointer bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-xs">
-                          {fotosInfra[fotoTipo] ? '✓ Cambiar' : 'Tomar Foto'}
-                          <input type="file" accept="image/*" capture="environment" className="hidden" onChange={e => manejarFotoGenerica(e, b64 => setFotosInfra({...fotosInfra, [fotoTipo]: b64}))} />
-                        </label>
-                      </div>
-                    ))}
+                    <p className="text-xs font-semibold text-cyan-400">Fotografías Reales Requeridas</p>
+                    {renderCampoFoto('Planta_Frontal', '1. Fotografía Vista Frontal (Rectificadores/Controlador)')}
+                    {renderCampoFoto('Planta_Trasera', '2. Fotografía Vista Trasera (Distribución DC)')}
+                    {renderCampoFoto('Planta_Placa', '3. Fotografía Placa Técnica')}
                   </div>
                 </div>
               )}
@@ -1206,7 +1281,7 @@ export default function App() {
                   <div className="grid grid-cols-3 gap-2">
                     <div>
                       <label className="text-xs text-slate-400">Capacidad (KVA)</label>
-                      <input type="text" placeholder="Ej: 10 KVA" value={formInfra.capacidad_kva || ''} onChange={e => setFormInfra({...formInfra, capacidad_kva: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
+                      <input type="text" placeholder="10 KVA" value={formInfra.capacidad_kva || ''} onChange={e => setFormInfra({...formInfra, capacidad_kva: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
                     </div>
                     <div>
                       <label className="text-xs text-slate-400">Marca Baterías</label>
@@ -1222,18 +1297,11 @@ export default function App() {
                     <input type="text" value={formInfra.capacidad_baterias || ''} onChange={e => setFormInfra({...formInfra, capacidad_baterias: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
                   </div>
 
-                  {/* 2 Fotos */}
                   <div className="pt-2 border-t border-slate-800 space-y-2">
-                    <p className="text-xs font-semibold text-cyan-400">Fotografías Requeridas</p>
-                    {['Vista Frontal', 'Vista Trasera'].map(fotoTipo => (
-                      <div key={fotoTipo} className="flex items-center justify-between bg-slate-800/40 p-2 rounded">
-                        <span className="text-xs text-slate-300">{fotoTipo}</span>
-                        <label className="cursor-pointer bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-xs">
-                          {fotosInfra[fotoTipo] ? '✓ Cambiar' : 'Tomar Foto'}
-                          <input type="file" accept="image/*" capture="environment" className="hidden" onChange={e => manejarFotoGenerica(e, b64 => setFotosInfra({...fotosInfra, [fotoTipo]: b64}))} />
-                        </label>
-                      </div>
-                    ))}
+                    <p className="text-xs font-semibold text-cyan-400">Fotografías Reales Requeridas</p>
+                    {renderCampoFoto('UPS_Frontal', '1. Fotografía Vista Frontal / Pantalla')}
+                    {renderCampoFoto('UPS_Trasera', '2. Fotografía Vista Trasera')}
+                    {renderCampoFoto('UPS_Placa', '3. Fotografía Placa de Datos')}
                   </div>
                 </div>
               )}
@@ -1244,11 +1312,11 @@ export default function App() {
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="text-xs text-slate-400">Tipo de Batería</label>
-                      <input type="text" placeholder="Ej: Litio / Plomo Ácido VRLA" value={formInfra.tipo_bateria || ''} onChange={e => setFormInfra({...formInfra, tipo_bateria: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
+                      <input type="text" placeholder="Ej: VRLA / Litio" value={formInfra.tipo_bateria || ''} onChange={e => setFormInfra({...formInfra, tipo_bateria: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
                     </div>
                     <div>
                       <label className="text-xs text-slate-400">Consumo (A/h)</label>
-                      <input type="text" placeholder="Ej: 150 Ah" value={formInfra.consumo_ah || ''} onChange={e => setFormInfra({...formInfra, consumo_ah: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
+                      <input type="text" placeholder="150 Ah" value={formInfra.consumo_ah || ''} onChange={e => setFormInfra({...formInfra, consumo_ah: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
                     </div>
                   </div>
                   <div>
@@ -1264,6 +1332,12 @@ export default function App() {
                       <label className="text-xs text-slate-400">Alto (cm)</label>
                       <input type="number" value={formInfra.alto_cm || ''} onChange={e => setFormInfra({...formInfra, alto_cm: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
                     </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-800 space-y-2">
+                    <p className="text-xs font-semibold text-cyan-400">Fotografías Reales Requeridas</p>
+                    {renderCampoFoto('Baterias_General', '1. Fotografía General del Banco de Baterías')}
+                    {renderCampoFoto('Baterias_Etiqueta', '2. Fotografía Etiqueta / Bornes de Conexión')}
                   </div>
                 </div>
               )}
@@ -1295,6 +1369,12 @@ export default function App() {
                       <input type="number" value={formInfra.alto_cm || ''} onChange={e => setFormInfra({...formInfra, alto_cm: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
                     </div>
                   </div>
+
+                  <div className="pt-2 border-t border-slate-800 space-y-2">
+                    <p className="text-xs font-semibold text-cyan-400">Fotografías Reales Requeridas</p>
+                    {renderCampoFoto('Inversor_Frontal', '1. Fotografía Vista Frontal')}
+                    {renderCampoFoto('Inversor_Placa', '2. Fotografía Placa de Datos / Conexiones')}
+                  </div>
                 </div>
               )}
 
@@ -1307,7 +1387,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- OTROS MODALES PREEXISTENTES --- */}
+      {/* --- OTROS MODALES --- */}
 
       {/* Modal Crear / Editar Headend */}
       {modalHeadend && (
