@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { dbLocal } from './dbLocal';
+import { sincronizarConSupabase } from './syncService';
 import { 
   Server, HardDrive, Plus, Camera, FileText, Download, 
   Wifi, WifiOff, ArrowLeft, Trash2, Edit2, BookOpen, Layers, 
-  Zap, Wind, ShieldCheck, BatteryCharging, Power, CheckCircle2
+  Zap, CheckCircle2, CloudUpload, Loader2 
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
@@ -73,6 +74,10 @@ export default function App() {
   const [catalogo, setCatalogo] = useState([]);
   const [infraestructuras, setInfraestructuras] = useState([]);
 
+  // Estados de Sincronización
+  const [sincronizando, setSincronizando] = useState(false);
+  const [mensajeSync, setMensajeSync] = useState('');
+
   // Modales
   const [modalHeadend, setModalHeadend] = useState(false);
   const [modalRack, setModalRack] = useState(false);
@@ -138,6 +143,31 @@ export default function App() {
     setVista('rack-detail');
   };
 
+  const ejecutarSincronizacion = async () => {
+    if (!online) {
+      alert('Debes tener conexión a Internet para sincronizar con Supabase.');
+      return;
+    }
+    try {
+      setSincronizando(true);
+      await sincronizarConSupabase((msg) => setMensajeSync(msg));
+      await cargarDatosLocales();
+      if (headendActual) {
+        const rackList = await dbLocal.racks.where('headend_id').equals(headendActual.id).toArray();
+        setRacks(rackList);
+        const infraList = await dbLocal.infraestructura.where('headend_id').equals(headendActual.id).toArray();
+        setInfraestructuras(infraList);
+      }
+      alert('¡Sincronización completada con éxito!');
+    } catch (err) {
+      console.error(err);
+      alert('Error al sincronizar: ' + err.message);
+    } finally {
+      setSincronizando(false);
+      setMensajeSync('');
+    }
+  };
+
   const manejarFotoGenerica = async (e, callback) => {
     const file = e.target.files[0];
     if (file) {
@@ -146,14 +176,13 @@ export default function App() {
         const fotoComprimida = await comprimirFoto(file, 1200, 0.75);
         callback(fotoComprimida);
       } catch (err) {
-        console.error("Error al procesar foto:", err);
+        console.error('Error al procesar foto:', err);
       } finally {
         setProcesandoFoto(false);
       }
     }
   };
 
-  // Helper visual para campos de toma de foto en el modal
   const renderCampoFoto = (clave, titulo) => (
     <div key={clave} className="bg-slate-800/60 p-3 rounded-lg border border-slate-700/60">
       <div className="flex items-center justify-between mb-2">
@@ -418,12 +447,11 @@ export default function App() {
     setEquipoEditandoCatalogo(null);
   };
 
-  // --- REPORTE PDF CONSOLIDADO (CON FOTOS REALES DE INFRAESTRUCTURA) ---
+  // --- REPORTE PDF CONSOLIDADO ---
   const exportarPDFCabecera = async () => {
     if (!headendActual) return;
     const doc = new jsPDF();
     
-    // Encabezado
     doc.setFillColor(15, 23, 42);
     doc.rect(0, 0, 210, 40, 'F');
     doc.setTextColor(255, 255, 255);
@@ -436,7 +464,6 @@ export default function App() {
 
     let startY = 48;
 
-    // 1. SECCIÓN BASTIDORES
     for (let i = 0; i < racks.length; i++) {
       const rk = racks[i];
       const equiposDelRack = await dbLocal.rack_equipos.where('rack_id').equals(rk.id).toArray();
@@ -483,7 +510,6 @@ export default function App() {
       startY = doc.lastAutoTable.finalY + 12;
     }
 
-    // 2. SECCIÓN INFRAESTRUCTURA (TABLA Y FOTOGRAFÍAS REALES)
     if (infraestructuras.length > 0) {
       doc.addPage();
       doc.setFontSize(16);
@@ -505,7 +531,6 @@ export default function App() {
         doc.text(`${j + 1}. ${inf.tipo}`, 14, posInfraY);
         posInfraY += 5;
 
-        // Fila de Datos
         const datosEntries = Object.entries(inf.datos || {}).map(([k, v]) => [k.replace(/_/g, ' ').toUpperCase(), v || '-']);
         doc.autoTable({
           startY: posInfraY,
@@ -517,7 +542,6 @@ export default function App() {
           margin: { left: 14, right: 100 }
         });
 
-        // Insertar Fotografías al lado derecho o debajo
         let fotoX = 115;
         let fotoY = posInfraY;
         if (inf.fotos) {
@@ -547,14 +571,13 @@ export default function App() {
     doc.save(`Auditoria_Completa_${headendActual.codigo}.pdf`);
   };
 
-  // --- DESCARGA ZIP CON CARPETAS Y FOTOS REALES ---
+  // --- DESCARGA ZIP COMPLETA ---
   const descargarFotosCabeceraZIP = async () => {
     if (!headendActual) return;
 
     const zip = new JSZip();
     const carpetaCabecera = zip.folder(`Cabecera_${headendActual.codigo}`);
 
-    // Fotos de Racks
     for (const rk of racks) {
       const carpetaRack = carpetaCabecera.folder(`Rack_${rk.nombre_rack.replace(/\s+/g, '_')}`);
       if (rk.foto_frontal?.startsWith('data:image')) {
@@ -568,7 +591,6 @@ export default function App() {
       });
     }
 
-    // Fotos de Infraestructura organizadas por tipo
     if (infraestructuras.length > 0) {
       const carpetaInfra = carpetaCabecera.folder(`00_Infraestructura_Facilidades`);
       infraestructuras.forEach((inf, idx) => {
@@ -589,19 +611,40 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      {/* Header */}
+      {/* Header Superior con Sincronización a Supabase */}
       <header className="bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center justify-between sticky top-0 z-30">
         <div className="flex items-center gap-3">
           <Layers className="w-6 h-6 text-cyan-400" />
           <h1 className="font-bold text-lg text-white tracking-wide">FTTH Headend Surveyor</h1>
         </div>
         <div className="flex items-center gap-3">
+          {/* Botón Sincronizar Nube */}
+          <button 
+            onClick={ejecutarSincronizacion} 
+            disabled={sincronizando}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-60 text-white text-xs font-semibold rounded-md shadow"
+            title="Sincronizar datos y fotos con Supabase"
+          >
+            {sincronizando ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span className="hidden sm:inline">{mensajeSync || 'Sincronizando...'}</span>
+              </>
+            ) : (
+              <>
+                <CloudUpload className="w-4 h-4" />
+                <span>Sincronizar Nube</span>
+              </>
+            )}
+          </button>
+
           <button 
             onClick={() => setVista('catalogo')} 
             className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs rounded-md border border-slate-700"
           >
-            <BookOpen className="w-4 h-4 text-cyan-400" /> Catálogo Maestro
+            <BookOpen className="w-4 h-4 text-cyan-400" /> Catálogo
           </button>
+          
           <div className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700">
             {online ? (
               <>
@@ -698,7 +741,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Botones de Exportación */}
               <div className="flex items-center gap-2">
                 <button 
                   onClick={exportarPDFCabecera} 
@@ -845,7 +887,6 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* Galería de fotos reales capturadas */}
                         {inf.fotos && Object.keys(inf.fotos).length > 0 && (
                           <div className="mt-3 pt-3 border-t border-slate-800 flex gap-2 overflow-x-auto pb-1">
                             {Object.entries(inf.fotos).map(([nombre, b64]) => b64 && (
@@ -1008,7 +1049,7 @@ export default function App() {
 
       </main>
 
-      {/* --- MODAL DETALLADO DE INFRAESTRUCTURA (CON FOTOS REALES) --- */}
+      {/* --- MODAL DETALLADO DE INFRAESTRUCTURA --- */}
       {modalInfra && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 w-full max-w-lg my-8 max-h-[90vh] overflow-y-auto">
@@ -1016,7 +1057,6 @@ export default function App() {
               {infraEditando ? `Editar ${infraEditando.tipo}` : 'Registrar Equipo de Infraestructura'}
             </h3>
             
-            {/* Selector de Tipo */}
             <div className="mb-4">
               <label className="text-xs text-slate-400 block mb-1">Categoría</label>
               <select
@@ -1037,7 +1077,7 @@ export default function App() {
 
             <form onSubmit={guardarInfra} className="space-y-4">
               
-              {/* 1. TABLERO ELÉCTRICO */}
+              {/* TABLERO ELÉCTRICO */}
               {tipoInfraSeleccionado === 'Tablero Eléctrico' && (
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
@@ -1053,11 +1093,11 @@ export default function App() {
                   <div className="grid grid-cols-3 gap-2">
                     <div>
                       <label className="text-xs text-slate-400">Tensión</label>
-                      <input type="text" placeholder="Ej: 220V/380V" value={formInfra.tension || ''} onChange={e => setFormInfra({...formInfra, tension: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
+                      <input type="text" placeholder="220V/380V" value={formInfra.tension || ''} onChange={e => setFormInfra({...formInfra, tension: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
                     </div>
                     <div>
                       <label className="text-xs text-slate-400">Interrupción</label>
-                      <input type="text" placeholder="Ej: 10kA" value={formInfra.interrupcion || ''} onChange={e => setFormInfra({...formInfra, interrupcion: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
+                      <input type="text" placeholder="10kA" value={formInfra.interrupcion || ''} onChange={e => setFormInfra({...formInfra, interrupcion: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm" />
                     </div>
                     <div>
                       <label className="text-xs text-slate-400">Barra</label>
@@ -1074,7 +1114,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* 2. TERMOSTATO */}
+              {/* TERMOSTATO */}
               {tipoInfraSeleccionado === 'Termostato' && (
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
@@ -1123,7 +1163,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* 3. AIRE ACONDICIONADO */}
+              {/* AIRE ACONDICIONADO */}
               {tipoInfraSeleccionado === 'Aire Acondicionado' && (
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
@@ -1176,7 +1216,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* 4. BARRA MGB */}
+              {/* BARRA MGB */}
               {tipoInfraSeleccionado === 'Barra MGB' && (
                 <div className="space-y-3">
                   <div className="grid grid-cols-3 gap-2">
@@ -1212,7 +1252,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* 5. SISTEMA DE ENERGÍA */}
+              {/* SISTEMA DE ENERGÍA */}
               {tipoInfraSeleccionado === 'Sistema de Energía' && (
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
@@ -1265,7 +1305,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* 6. UPS */}
+              {/* UPS */}
               {tipoInfraSeleccionado === 'UPS' && (
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
@@ -1306,7 +1346,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* 7. BANCO DE BATERÍAS */}
+              {/* BANCO DE BATERÍAS */}
               {tipoInfraSeleccionado === 'Banco de Baterías' && (
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
@@ -1342,7 +1382,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* 8. INVERSOR */}
+              {/* INVERSOR */}
               {tipoInfraSeleccionado === 'Inversor' && (
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
@@ -1387,9 +1427,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- OTROS MODALES --- */}
-
-      {/* Modal Crear / Editar Headend */}
+      {/* MODAL CABECERA */}
       {modalHeadend && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 w-full max-w-md">
@@ -1418,7 +1456,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Modal Crear / Editar Rack */}
+      {/* MODAL RACK */}
       {modalRack && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 w-full max-w-md">
@@ -1452,7 +1490,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Modal Asignar Equipo en Rack */}
+      {/* MODAL EQUIPO EN RACK */}
       {modalEquipo && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 w-full max-w-md">
@@ -1516,7 +1554,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Modal Catálogo */}
+      {/* MODAL CATÁLOGO */}
       {modalCatalogo && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 w-full max-w-md">
