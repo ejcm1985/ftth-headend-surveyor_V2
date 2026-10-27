@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { dbLocal } from './dbLocal';
 import { 
   Server, HardDrive, Plus, Camera, FileText, Download, 
-  Wifi, WifiOff, ArrowLeft, Trash2, Edit2, BookOpen, Layers 
+  Wifi, WifiOff, ArrowLeft, Trash2, Edit2, BookOpen, Layers, RefreshCw 
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
@@ -11,11 +11,52 @@ import { saveAs } from 'file-saver';
 
 const TIPOS_EQUIPO = ['OLT', 'ODF', 'Switch', 'EDFA', 'Chasis', 'Energía', 'Otro'];
 
+// Función para comprimir y estandarizar fotos tomadas en el móvil
+const comprimirFoto = (file, maxDimension = 1200, calidad = 0.75) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+
+        // Escalar manteniendo proporción
+        if (width > height) {
+          if (width > maxDimension) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          }
+        } else {
+          if (height > maxDimension) {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // Exportar como JPEG estándar sRGB (evita cuadros grises o corrupción en jsPDF)
+        const base64Comprimido = canvas.toDataURL('image/jpeg', calidad);
+        resolve(base64Comprimido);
+      };
+      img.onerror = (err) => reject(err);
+    };
+    reader.onerror = (err) => reject(err);
+  });
+};
+
 export default function App() {
   const [online, setOnline] = useState(navigator.onLine);
-  const [vista, setVista] = useState('headends'); // 'headends' | 'racks' | 'rack-detail' | 'catalogo'
+  const [vista, setVista] = useState('headends');
   
-  // Estados principales
   const [headends, setHeadends] = useState([]);
   const [headendActual, setHeadendActual] = useState(null);
   const [racks, setRacks] = useState([]);
@@ -32,9 +73,8 @@ export default function App() {
   const [uSeleccionada, setUSeleccionada] = useState(1);
   const [equipoEditandoCatalogo, setEquipoEditandoCatalogo] = useState(null);
   const [rackEditando, setRackEditando] = useState(null);
-  
-  // Estado para saber si estamos editando una Cabecera (null = crear nueva)
   const [headendEditando, setHeadendEditando] = useState(null);
+  const [procesandoFoto, setProcesandoFoto] = useState(false);
 
   // Formularios
   const [formHeadend, setFormHeadend] = useState({ nombre: '', codigo: '', direccion: '' });
@@ -79,16 +119,24 @@ export default function App() {
     setVista('rack-detail');
   };
 
-  const manejarFoto = (e, callback) => {
+  // Manejo y compresión de fotos del teléfono
+  const manejarFoto = async (e, callback) => {
     const file = e.target.files[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => callback(reader.result);
-      reader.readAsDataURL(file);
+      try {
+        setProcesandoFoto(true);
+        const fotoComprimida = await comprimirFoto(file, 1200, 0.75);
+        callback(fotoComprimida);
+      } catch (err) {
+        console.error("Error al procesar la foto:", err);
+        alert("Hubo un problema al procesar la imagen.");
+      } finally {
+        setProcesandoFoto(false);
+      }
     }
   };
 
-  // --- CRUD CABECERAS (HEADENDS) ---
+  // --- CRUD CABECERAS ---
   const abrirModalCrearHeadend = () => {
     setHeadendEditando(null);
     setFormHeadend({ nombre: '', codigo: '', direccion: '' });
@@ -96,30 +144,21 @@ export default function App() {
   };
 
   const abrirModalEditarHeadend = (he, e) => {
-    e.stopPropagation(); // Evita navegar a la vista de racks
+    e.stopPropagation();
     setHeadendEditando(he);
-    setFormHeadend({
-      nombre: he.nombre,
-      codigo: he.codigo,
-      direccion: he.direccion || ''
-    });
+    setFormHeadend({ nombre: he.nombre, codigo: he.codigo, direccion: he.direccion || '' });
     setModalHeadend(true);
   };
 
   const eliminarHeadend = async (id, e) => {
     e.stopPropagation();
-    if (window.confirm('¿Seguro que deseas eliminar esta cabecera? Se eliminarán TODOS sus bastidores y equipos asociados.')) {
-      // 1. Obtener los racks asociados
+    if (window.confirm('¿Seguro que deseas eliminar esta cabecera? Se eliminarán todos sus racks y equipos asociados.')) {
       const racksAsociados = await dbLocal.racks.where('headend_id').equals(id).toArray();
-      // 2. Borrar equipos de cada uno de esos racks
       for (const rk of racksAsociados) {
         await dbLocal.rack_equipos.where('rack_id').equals(rk.id).delete();
       }
-      // 3. Borrar racks asociados
       await dbLocal.racks.where('headend_id').equals(id).delete();
-      // 4. Borrar la cabecera
       await dbLocal.headends.delete(id);
-      
       setHeadends(headends.filter(h => h.id !== id));
     }
   };
@@ -127,7 +166,6 @@ export default function App() {
   const guardarHeadend = async (e) => {
     e.preventDefault();
     if (headendEditando) {
-      // Modo Edición
       const datosActualizados = {
         nombre: formHeadend.nombre,
         codigo: formHeadend.codigo,
@@ -137,14 +175,12 @@ export default function App() {
       await dbLocal.headends.update(headendEditando.id, datosActualizados);
       setHeadends(headends.map(h => (h.id === headendEditando.id ? { ...h, ...datosActualizados } : h)));
     } else {
-      // Modo Creación
       const nuevo = { id: crypto.randomUUID(), ...formHeadend, sincronizado: false };
       await dbLocal.headends.add(nuevo);
       setHeadends([...headends, nuevo]);
     }
     setModalHeadend(false);
     setHeadendEditando(null);
-    setFormHeadend({ nombre: '', codigo: '', direccion: '' });
   };
 
   // --- CRUD RACKS ---
@@ -167,7 +203,7 @@ export default function App() {
 
   const eliminarRack = async (id, e) => {
     e.stopPropagation();
-    if (window.confirm('¿Seguro que deseas eliminar este rack y TODOS los equipos instalados en él?')) {
+    if (window.confirm('¿Seguro que deseas eliminar este rack y todos sus equipos asociados?')) {
       await dbLocal.racks.delete(id);
       await dbLocal.rack_equipos.where('rack_id').equals(id).delete();
       setRacks(racks.filter(r => r.id !== id));
@@ -201,7 +237,7 @@ export default function App() {
     setRackEditando(null);
   };
 
-  // Guardar Equipo en Rack
+  // --- CRUD EQUIPOS EN RACK ---
   const guardarEquipo = async (e) => {
     e.preventDefault();
     const nuevo = {
@@ -228,7 +264,7 @@ export default function App() {
     }
   };
 
-  // Catálogo CRUD
+  // --- CATÁLOGO CRUD ---
   const abrirModalCrearCatalogo = () => {
     setEquipoEditandoCatalogo(null);
     setFormCatalogo({ nombre: '', tipo: 'OLT', unidades_u: 1, descripcion_default: '' });
@@ -277,11 +313,12 @@ export default function App() {
     setEquipoEditandoCatalogo(null);
   };
 
-  // Exportar PDF de Cabecera Completa
+  // --- REPORTE PDF CON IMÁGENES COMPRIMIDAS ---
   const exportarPDFCabecera = async () => {
     if (!headendActual) return;
     const doc = new jsPDF();
     
+    // Encabezado
     doc.setFillColor(15, 23, 42);
     doc.rect(0, 0, 210, 40, 'F');
     doc.setTextColor(255, 255, 255);
@@ -290,7 +327,7 @@ export default function App() {
     doc.setFontSize(10);
     doc.setTextColor(148, 163, 184);
     doc.text(`Código: ${headendActual.codigo} | Dirección: ${headendActual.direccion || 'N/A'}`, 14, 28);
-    doc.text(`Fecha de levantamiento: ${new Date().toLocaleDateString()} | Total Racks: ${racks.length}`, 14, 34);
+    doc.text(`Fecha: ${new Date().toLocaleDateString()} | Total Racks: ${racks.length}`, 14, 34);
 
     let startY = 48;
 
@@ -307,12 +344,13 @@ export default function App() {
       doc.setTextColor(14, 116, 144);
       doc.text(`Rack: ${rk.nombre_rack} (${rk.total_u} Unidades)`, 14, startY);
       
+      // Foto frontal del Rack optimizada para PDF
       if (rk.foto_frontal && rk.foto_frontal.startsWith('data:image')) {
         try {
-          doc.addImage(rk.foto_frontal, 'JPEG', 14, startY + 4, 45, 60);
+          doc.addImage(rk.foto_frontal, 'JPEG', 14, startY + 4, 45, 60, undefined, 'FAST');
           startY += 68;
         } catch (e) {
-          console.error("No se pudo insertar imagen de rack en PDF", e);
+          console.error("Error al insertar foto de rack en PDF", e);
           startY += 8;
         }
       } else {
@@ -344,7 +382,7 @@ export default function App() {
     doc.save(`Auditoria_Completa_${headendActual.codigo}.pdf`);
   };
 
-  // Descargar ZIP completo
+  // --- DESCARGAR TODAS LAS FOTOS EN ZIP ---
   const descargarFotosCabeceraZIP = async () => {
     if (!headendActual || racks.length === 0) {
       alert("No hay racks ni fotos para descargar.");
@@ -411,7 +449,7 @@ export default function App() {
       {/* Contenido Principal */}
       <main className="flex-1 p-4 max-w-5xl w-full mx-auto">
 
-        {/* 1. VISTA DE CABECERAS (CON EDICIÓN Y BORRADO) */}
+        {/* 1. VISTA DE CABECERAS */}
         {vista === 'headends' && (
           <div>
             <div className="flex justify-between items-center mb-6">
@@ -446,7 +484,6 @@ export default function App() {
                           {he.codigo}
                         </span>
                         
-                        {/* Botones Editar y Borrar Cabecera */}
                         <div className="flex items-center gap-1">
                           <button 
                             onClick={(e) => abrirModalEditarHeadend(he, e)} 
@@ -493,14 +530,12 @@ export default function App() {
                 <button 
                   onClick={exportarPDFCabecera} 
                   className="flex items-center gap-1.5 px-3 py-2 bg-cyan-950 hover:bg-cyan-900 text-cyan-400 border border-cyan-800 text-xs font-semibold rounded-lg shadow-sm"
-                  title="Descargar PDF con todos los racks"
                 >
                   <FileText className="w-4 h-4" /> PDF Cabecera
                 </button>
                 <button 
                   onClick={descargarFotosCabeceraZIP} 
                   className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 text-xs font-semibold rounded-lg shadow-sm"
-                  title="Descargar todas las fotos en ZIP"
                 >
                   <Download className="w-4 h-4" /> Todas las Fotos (ZIP)
                 </button>
@@ -793,7 +828,7 @@ export default function App() {
                   <div className="mb-2 relative w-full h-28 rounded-lg overflow-hidden border border-cyan-500">
                     <img src={formRack.foto_frontal} alt="Vista previa rack" className="w-full h-full object-cover" />
                     <span className="absolute bottom-1 right-1 bg-black/80 text-[10px] text-cyan-300 px-1.5 py-0.5 rounded">
-                      Foto actual cargada
+                      Foto lista y optimizada ✓
                     </span>
                   </div>
                 )}
@@ -803,6 +838,7 @@ export default function App() {
                   onChange={e => manejarFoto(e, (fotoBase64) => setFormRack({...formRack, foto_frontal: fotoBase64}))}
                   className="w-full text-xs text-slate-400 file:mr-2 file:py-2 file:px-3 file:rounded file:bg-slate-800 file:border-0 file:text-white" 
                 />
+                {procesandoFoto && <p className="text-xs text-cyan-400 mt-1">Optimizando foto...</p>}
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
@@ -813,7 +849,7 @@ export default function App() {
                 >
                   Cancelar
                 </button>
-                <button type="submit" className="px-4 py-2 bg-cyan-600 rounded text-sm font-bold">
+                <button type="submit" disabled={procesandoFoto} className="px-4 py-2 bg-cyan-600 rounded text-sm font-bold disabled:opacity-50">
                   {rackEditando ? 'Guardar Cambios' : 'Crear Rack'}
                 </button>
               </div>
@@ -902,11 +938,12 @@ export default function App() {
                   onChange={e => manejarFoto(e, (fotoBase64) => setFormEquipo({...formEquipo, foto: fotoBase64}))}
                   className="w-full text-xs text-slate-400 file:mr-2 file:py-2 file:px-3 file:rounded file:bg-slate-800 file:border-0 file:text-white" 
                 />
+                {procesandoFoto && <p className="text-xs text-cyan-400 mt-1">Optimizando foto...</p>}
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
                 <button type="button" onClick={() => setModalEquipo(false)} className="px-4 py-2 bg-slate-800 rounded text-sm">Cancelar</button>
-                <button type="submit" className="px-4 py-2 bg-cyan-600 rounded text-sm font-bold">Asignar al Rack</button>
+                <button type="submit" disabled={procesandoFoto} className="px-4 py-2 bg-cyan-600 rounded text-sm font-bold disabled:opacity-50">Asignar al Rack</button>
               </div>
             </form>
           </div>
